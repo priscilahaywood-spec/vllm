@@ -2,6 +2,28 @@
 
 适用于 A100 服务器上的 Qwen3-8B。客户端通过 SSH 隧道访问 FastAPI 网关 `127.0.0.1:9000`，网关将请求转发到 vLLM `127.0.0.1:8000`。每位使用者持有一把独立的 Bearer API Key。
 
+## 已部署网关升级密钥热加载
+
+在已通过 Git 同步的服务器上，切到项目的 `main` 分支后拉取更新：
+
+```bash
+cd /root/llm-inference-optimization
+git pull --ff-only origin main
+```
+
+也可以把 `gateway-live-keys.zip` 上传到项目目录，备份同名文件后执行 `unzip -o gateway-live-keys.zip`。
+
+已有 `.env` 可继续使用。同步后重启一次 FastAPI 网关以载入新版。使用矩池云 HTTP 9000 端口转发时，沿用公网部署的监听方式：
+
+```bash
+cd /root/llm-inference-optimization
+conda activate llm-gateway
+python -m uvicorn gateway.main:app --host 0.0.0.0 --port 9000 \
+  2>&1 | tee -a logs/gateway.log
+```
+
+以后可在另一个终端运行 `python scripts/manage_keys.py add student1 student2 student3` 一次发放多把密钥。命令完成后，同学的下一次 API 请求就可使用新密钥。撤销也在下一次鉴权时生效。
+
 ## 1. 同步代码
 
 把 `llm-inference-gateway.zip` 上传到服务器的 `/root/llm-inference-optimization/`。如服务器上的同名网关文件已有修改，先备份，再解压。也可用 Git 同步这次网关改动。
@@ -31,10 +53,10 @@ chmod 600 .env
 
 如果 `llm-gateway` 环境还未创建，先执行 `conda create -n llm-gateway python=3.11`。如果原来的 `uv` 路径不可用，在激活环境后执行 `python -m pip install -r requirements-gateway.txt`。
 
-`init` 会在终端显示每个人的密钥一次，只将 SHA-256 摘要写入项目根目录的 `.env`。为每个人使用独立名称，支持 1–64 个 ASCII 字母、数字、短横线或下划线。后续增发或撤销后，重启网关使改动生效。
+`init` 会在终端显示每个人的密钥一次，只将 SHA-256 摘要写入项目根目录的 `.env`。为每个人使用独立名称，支持 1–64 个 ASCII 字母、数字、短横线或下划线。也可以先启动网关，再执行 `init`。初始化之前，推理接口返回 `401`。增发或撤销后，下一次 API 请求会使用更新后的密钥配置。
 
 ```bash
-python scripts/manage_keys.py add student4
+python scripts/manage_keys.py add student4 student5
 python scripts/manage_keys.py revoke bob
 ```
 

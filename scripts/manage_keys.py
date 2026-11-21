@@ -65,7 +65,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Manage per-user vLLM gateway API keys")
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("init").add_argument("names", nargs="+")
-    commands.add_parser("add").add_argument("names", nargs=1)
+    commands.add_parser("add").add_argument("names", nargs="+")
     commands.add_parser("revoke").add_argument("names", nargs=1)
     args = parser.parse_args()
 
@@ -77,7 +77,7 @@ def main() -> None:
         print(f"{name}: {token}")
     if args.action == "revoke":
         print(f"Revoked key for {args.names[0]}")
-    print("Restart the gateway to load the updated keys.")
+    print("Updated keys take effect on the next request.")
 
 
 if __name__ == "__main__":

@@ -42,12 +42,11 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
             "VLLM_API_KEY": "test-upstream",
             "VLLM_BASE_URL": "http://127.0.0.1:8000",
         }))
-        contexts.enter_context(patch("gateway.config.dotenv_values", return_value={
-            "GATEWAY_API_KEY_HASHES": json.dumps({
-                "alice": sha256(b"test-gateway").hexdigest(),
-                "bob": sha256(b"test-bob").hexdigest(),
-            }),
-        }))
+        directory = contexts.enter_context(TemporaryDirectory())
+        env = Path(directory) / ".env"
+        hashes = {"alice": sha256(b"test-gateway").hexdigest(), "bob": sha256(b"test-bob").hexdigest()}
+        env.write_text(f"GATEWAY_API_KEY_HASHES='{json.dumps(hashes)}'\n", encoding="utf-8")
+        contexts.enter_context(patch("gateway.config.ENV_FILE", env))
 
     async def asyncSetUp(self):
         contexts = AsyncExitStack()
@@ -150,37 +149,47 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get("/v1/models", headers=self.auth)).status_code, 504)
 
 
-class StartupTest(unittest.IsolatedAsyncioTestCase):
-    async def test_requires_key(self):
-        with patch("gateway.config.dotenv_values", return_value={}):
-            with self.assertRaisesRegex(RuntimeError, "manage_keys"):
-                async with app.router.lifespan_context(app):
-                    self.fail("Gateway started without an API key")
-
-    async def test_key_lifecycle(self):
+class KeyLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_keys_change_during_same_lifespan(self):
         with TemporaryDirectory() as directory:
             env = Path(directory) / ".env"
-            env.write_text("# preserve settings\nVLLM_BASE_URL=http://127.0.0.1:8000\n")
             with patch("gateway.config.ENV_FILE", env), patch.object(manage_keys, "ENV_FILE", env):
-                keys = manage_keys.update_keys("init", ["alice", "bob"])
-                self.assertNotEqual(keys["alice"], keys["bob"])
-                with self.assertRaisesRegex(ValueError, "already initialized"):
-                    manage_keys.update_keys("init", ["charlie"])
-                keys.update(manage_keys.update_keys("add", ["charlie"]))
-                manage_keys.update_keys("revoke", ["bob"])
-                content = env.read_text()
-                self.assertIn("# preserve settings", content)
-                self.assertNotIn(sha256(keys["bob"].encode()).hexdigest(), content)
-                self.assertTrue(all(key not in content for key in keys.values()))
-
-                async with app.router.lifespan_context(app):
-                    self.assertEqual(app.state.key_owners, {
-                        sha256(keys[name].encode()).hexdigest(): name for name in ("alice", "charlie")
-                    })
-                    async with httpx.AsyncClient(
+                async with AsyncExitStack() as contexts:
+                    mock_upstream = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+                    mock_client = partial(httpx.AsyncClient, transport=mock_upstream)
+                    with patch("gateway.main.httpx.AsyncClient", mock_client):
+                        await contexts.enter_async_context(app.router.lifespan_context(app))
+                    client = await contexts.enter_async_context(httpx.AsyncClient(
                         transport=httpx.ASGITransport(app=app), base_url="http://gateway.local"
-                    ) as client:
-                        revoked = await client.get(
-                            "/v1/models", headers={"Authorization": f"Bearer {keys['bob']}"}
+                    ))
+
+                    async def status(key):
+                        response = await client.get(
+                            "/v1/models", headers={"Authorization": f"Bearer {key}"}
                         )
-                        self.assertEqual(revoked.status_code, 401)
+                        return response.status_code
+
+                    self.assertEqual(await status("unknown"), 401)
+                    env.write_text("# preserve settings\nVLLM_BASE_URL=http://127.0.0.1:8000\n", encoding="utf-8")
+                    keys = manage_keys.update_keys("init", ["alice", "bob"])
+                    self.assertNotEqual(keys["alice"], keys["bob"])
+                    self.assertEqual(await status(keys["alice"]), 200)
+                    self.assertEqual(await status(keys["bob"]), 200)
+                    with self.assertRaisesRegex(ValueError, "already initialized"):
+                        manage_keys.update_keys("init", ["charlie"])
+
+                    keys.update(manage_keys.update_keys("add", ["charlie", "dana"]))
+                    self.assertEqual(await status(keys["charlie"]), 200)
+                    self.assertEqual(await status(keys["dana"]), 200)
+                    manage_keys.update_keys("revoke", ["bob"])
+                    self.assertEqual(await status(keys["bob"]), 401)
+                    self.assertEqual(await status(keys["alice"]), 200)
+
+                    content = env.read_text(encoding="utf-8")
+                    self.assertIn("# preserve settings", content)
+                    self.assertNotIn(sha256(keys["bob"].encode()).hexdigest(), content)
+                    self.assertTrue(all(key not in content for key in keys.values()))
+                    env.write_text("GATEWAY_API_KEY_HASHES=broken\n", encoding="utf-8")
+                    self.assertEqual(await status(keys["alice"]), 503)
+                    env.unlink()
+                    self.assertEqual(await status(keys["alice"]), 401)

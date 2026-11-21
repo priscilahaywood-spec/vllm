@@ -26,7 +26,6 @@ async def lifespan(app: FastAPI):
         timeout=httpx.Timeout(300.0, connect=5.0, pool=5.0, write=30.0),
         trust_env=False,
     ) as client:
-        app.state.key_owners = settings.key_owners
         app.state.upstream = client
         yield
 
