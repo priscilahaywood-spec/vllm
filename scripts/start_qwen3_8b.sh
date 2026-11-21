@@ -18,6 +18,8 @@ mkdir -p logs
   --served-model-name Qwen3-8B \
   --host 127.0.0.1 \
   --port 8000 \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes \
   --dtype bfloat16 \
   --max-model-len 8192 \
   --gpu-memory-utilization 0.85 \
