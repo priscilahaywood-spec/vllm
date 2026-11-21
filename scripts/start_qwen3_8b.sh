@@ -21,7 +21,7 @@ mkdir -p logs
   --enable-auto-tool-choice \
   --tool-call-parser hermes \
   --dtype bfloat16 \
-  --hf-overrides '{"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"factor":4.0,"original_max_position_embeddings":32768}}' \
+  --hf-overrides '{"max_position_embeddings":131072,"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"factor":4.0,"original_max_position_embeddings":32768}}' \
   --max-model-len 131072 \
   --gpu-memory-utilization 0.85 \
   2>&1 | tee -a logs/qwen3-8b.log
