@@ -21,6 +21,6 @@ mkdir -p logs
   --enable-auto-tool-choice \
   --tool-call-parser hermes \
   --dtype bfloat16 \
-  --max-model-len 8192 \
+  --max-model-len 16384 \
   --gpu-memory-utilization 0.85 \
   2>&1 | tee -a logs/qwen3-8b.log
