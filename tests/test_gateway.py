@@ -33,6 +33,7 @@ class EventStream(httpx.AsyncByteStream):
 class GatewayTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.stream = EventStream()
+        self.model = "Qwen3-8B"
         self.upstream_requests = []
         self.failure = None
         self.auth = {"Authorization": "Bearer test-gateway"}
@@ -65,11 +66,11 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         if request.url.path == "/health":
             return httpx.Response(200)
         if request.url.path == "/v1/models":
-            return httpx.Response(200, json={"data": [{"id": "Qwen3-8B"}]})
+            return httpx.Response(200, json={"data": [{"id": self.model}]})
 
         self.assertEqual((request.method, request.url.path), ("POST", "/v1/chat/completions"))
         body = json.loads(request.content)
-        if body["model"] != "Qwen3-8B":
+        if body["model"] != self.model:
             return httpx.Response(404, json={"error": {"message": "Unknown model"}})
         if body.get("stream"):
             return httpx.Response(
@@ -137,6 +138,27 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(self.upstream_requests[-1].content)
         self.assertEqual(payload["stream_options"], {"include_usage": True})
         self.assertTrue(self.stream.closed)
+
+    async def test_qwen2_5_3b_models_and_chat(self):
+        self.model = "Qwen2.5-3B-Instruct"
+        models = await self.client.get("/v1/models", headers=self.auth)
+        self.assertEqual(models.status_code, 200)
+        self.assertEqual(models.json()["data"][0]["id"], self.model)
+
+        payload = {"model": self.model, "messages": [{"role": "user", "content": "Hello"}]}
+        endpoint = "/v1/chat/completions"
+        response = await self.client.post(endpoint, headers=self.auth, json=payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["usage"], USAGE)
+        self.assertEqual(json.loads(self.upstream_requests[-1].content), payload)
+
+        response = await self.client.post(endpoint, headers=self.auth, json={**payload, "stream": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertIn("data: [DONE]", response.text.splitlines())
+        self.assertEqual(json.loads(self.upstream_requests[-1].content), {
+            **payload, "stream": True, "stream_options": {"include_usage": True},
+        })
 
     async def test_health_and_upstream_failures(self):
         self.assertEqual((await self.client.get("/ready")).status_code, 200)
